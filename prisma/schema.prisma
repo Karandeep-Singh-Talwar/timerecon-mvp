@@ -1,0 +1,271 @@
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+
+
+// === IDENTITY ===
+
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  passwordHash      String
+  name              String
+  timezone          String   @default("UTC")
+  workingHoursStart String   @default("09:00")
+  workingHoursEnd   String   @default("17:30")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  integrations     Integration[]
+  normalizedEvents NormalizedEvent[]
+  workSessions     WorkSession[]
+  timesheets       Timesheet[]
+  userLearnings    UserLearning[]
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  users           User[]
+  privacySettings PrivacySettings?
+}
+
+model PrivacySettings {
+  id             String       @id @default(cuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  enabledIntegrations     String[] // ["jira", "github", "calendar"]
+  dataRetentionDays       Int      @default(90)
+  managersCanViewEvidence Boolean  @default(false)
+  collectMeetingAttendees Boolean  @default(true)
+}
+
+// === INTEGRATIONS ===
+
+model Integration {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  provider          String // "jira" | "github" | "google_calendar"
+  accessToken       String // encrypted at application level
+  refreshToken      String? // encrypted at application level
+  tokenExpiresAt    DateTime?
+  externalAccountId String? // e.g., Jira cloudId, GitHub username
+  metadata          Json? // provider-specific config
+  status            String    @default("active") // "active" | "expired" | "revoked"
+  lastSyncAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([userId, provider])
+}
+
+// === WORK CONTEXT ===
+
+model WorkItem {
+  id          String  @id @default(cuid())
+  userId      String
+  provider    String // "jira" | "github"
+  externalId  String // Jira issue key or GitHub issue/PR number
+  externalUrl String?
+
+  title       String
+  description String?
+  status      String? // "open", "in_progress", "done"
+  project     String? // Jira project key or GitHub repo
+  itemType    String? // "story", "bug", "task", "pr", "issue"
+
+  metadata   Json? // provider-specific extra fields
+  lastSyncAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  normalizedEvents NormalizedEvent[]
+  allocations      Allocation[]
+
+  @@unique([userId, provider, externalId])
+}
+
+// === NORMALIZED EVIDENCE ===
+
+model NormalizedEvent {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  provider  String // "jira" | "github" | "google_calendar"
+  eventType String // "commit" | "pr_opened" | "pr_review" | "pr_merged"
+  // | "issue_updated" | "issue_commented" | "worklog"
+  // | "calendar_event" | "branch_activity"
+
+  occurredAt DateTime
+  endedAt    DateTime?
+  duration   Int? // Duration in minutes
+
+  title       String
+  description String?
+  workItemId  String?
+  workItem    WorkItem? @relation(fields: [workItemId], references: [id])
+
+  metadata    Json? // Raw evidence details
+  externalUrl String?
+
+  createdAt DateTime @default(now())
+
+  allocationEvidence AllocationEvidence[]
+
+  @@index([userId, occurredAt])
+  @@index([userId, provider, occurredAt])
+}
+
+// === WORKDAY RECONSTRUCTION ===
+
+model WorkSession {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  date               DateTime @db.Date
+  startTime          DateTime
+  endTime            DateTime
+  totalMinutes       Int
+  allocatedMinutes   Int
+  unallocatedMinutes Int
+
+  status String @default("draft") // "draft" | "in_review" | "approved"
+
+  allocations Allocation[]
+  timesheet   Timesheet?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+// === ALLOCATION ===
+
+model Allocation {
+  id            String      @id @default(cuid())
+  workSessionId String
+  workSession   WorkSession @relation(fields: [workSessionId], references: [id], onDelete: Cascade)
+
+  startTime       DateTime
+  endTime         DateTime
+  durationMinutes Int
+
+  allocationType String // "work_item" | "meeting" | "pr_review" | "general_engineering" | "admin" | "unallocated"
+  workItemId     String?
+  workItem       WorkItem? @relation(fields: [workItemId], references: [id])
+  title          String
+  description    String?
+
+  confidence      Float // 0.0 to 1.0
+  confidenceLevel String // "high" | "medium" | "needs_review"
+
+  status         String  @default("suggested") // "suggested" | "approved" | "edited" | "split" | "merged"
+  isUserModified Boolean @default(false)
+  sortOrder      Int     @default(0)
+
+  evidence   AllocationEvidence[]
+  correction UserCorrection?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workSessionId, startTime])
+}
+
+model AllocationEvidence {
+  id           String     @id @default(cuid())
+  allocationId String
+  allocation   Allocation @relation(fields: [allocationId], references: [id], onDelete: Cascade)
+
+  normalizedEventId String
+  normalizedEvent   NormalizedEvent @relation(fields: [normalizedEventId], references: [id])
+
+  evidenceType String // "direct_reference" | "branch_match" | "temporal_overlap" etc.
+  strength     Float // 0.0 to 1.0
+  explanation  String // Human-readable
+
+  @@index([allocationId])
+}
+
+// === USER CORRECTIONS ===
+
+model UserCorrection {
+  id           String     @id @default(cuid())
+  allocationId String     @unique
+  allocation   Allocation @relation(fields: [allocationId], references: [id], onDelete: Cascade)
+
+  correctionType String // "reassign" | "split" | "merge" | "confirm" | "delete"
+  originalData   Json
+  correctedData  Json
+
+  createdAt DateTime @default(now())
+}
+
+model UserLearning {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  learningType String // "meeting_project" | "repo_project" | "branch_workitem" etc.
+  pattern      String
+  resolution   String
+  confidence   Float  @default(1.0)
+  occurrences  Int    @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, learningType, pattern])
+}
+
+// === TIMESHEET ===
+
+model Timesheet {
+  id            String      @id @default(cuid())
+  workSessionId String      @unique
+  workSession   WorkSession @relation(fields: [workSessionId], references: [id])
+
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  date         DateTime @db.Date
+  totalMinutes Int
+  status       String   @default("approved") // "approved" | "exported"
+
+  entries TimesheetEntry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, date])
+}
+
+model TimesheetEntry {
+  id          String    @id @default(cuid())
+  timesheetId String
+  timesheet   Timesheet @relation(fields: [timesheetId], references: [id], onDelete: Cascade)
+
+  workItemKey     String?
+  project         String?
+  description     String
+  durationMinutes Int
+  billable        Boolean @default(true)
+  category        String?
+}

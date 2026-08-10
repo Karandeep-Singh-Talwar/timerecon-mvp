@@ -1,0 +1,60 @@
+.integrationCards {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.integrationCard {
+  composes: card from global;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.integrationInfo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.integrationIcon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.integrationName {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.integrationDesc {
+  font-size: 0.8125rem;
+  color: var(--text-tertiary);
+}
+
+.integrationStatus {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.statusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.statusConnected {
+  background: var(--success);
+}
+
+.statusDisconnected {
+  background: var(--text-tertiary);
+}
