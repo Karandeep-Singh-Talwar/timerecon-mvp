@@ -15,8 +15,17 @@ const registerSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
+  let body: any;
   try {
-    const body = await request.json();
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { success: false, error: { code: 'INVALID_JSON', message: 'Invalid JSON body' } },
+      { status: 400 }
+    );
+  }
+
+  try {
     const parsed = registerSchema.safeParse(body);
 
     if (!parsed.success) {
