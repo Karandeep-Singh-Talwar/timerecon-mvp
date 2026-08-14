@@ -31,8 +31,13 @@ export default function Sidebar({ userName = 'Developer', userEmail = '' }: Side
     .toUpperCase()
     .slice(0, 2);
 
-  const handleSignOut = () => {
-    signOut({ callbackUrl: '/login' });
+  const handleSignOut = async () => {
+    try {
+      await signOut({ redirect: false });
+    } catch {
+      // Ignore network abort
+    }
+    window.location.href = '/login';
   };
 
   return (

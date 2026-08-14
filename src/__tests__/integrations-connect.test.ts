@@ -27,30 +27,28 @@ describe('GET /api/integrations/[provider]/connect', () => {
     process.env = envBackup;
   });
 
-  it('redirects browser GET request to /settings/integrations when provider is unconfigured', async () => {
-    const req = new NextRequest('http://localhost:3000/api/integrations/github/connect', {
-      headers: { accept: 'text/html,application/xhtml+xml' },
-    });
+  it('automatically connects in mock mode when provider is unconfigured', async () => {
+    const req = new NextRequest('http://localhost:3000/api/integrations/github/connect');
 
     const res = await GET(req, { params: Promise.resolve({ provider: 'github' }) });
 
     expect(res.status).toBe(307);
     const location = res.headers.get('location');
     expect(location).toContain('/settings/integrations');
-    expect(location).toContain('error=unconfigured_provider');
-    expect(location).toContain('provider=github');
+    expect(location).toContain('connected=github');
+    expect(location).toContain('mock=true');
   });
 
-  it('returns JSON 503 when API request (Accept: application/json) hits unconfigured provider', async () => {
-    const req = new NextRequest('http://localhost:3000/api/integrations/github/connect', {
-      headers: { accept: 'application/json' },
-    });
+  it('redirects to error page when provider is unconfigured and ALLOW_MOCK_CONNECTORS=false', async () => {
+    process.env.ALLOW_MOCK_CONNECTORS = 'false';
 
+    const req = new NextRequest('http://localhost:3000/api/integrations/github/connect');
     const res = await GET(req, { params: Promise.resolve({ provider: 'github' }) });
 
-    expect(res.status).toBe(503);
-    const body = await res.json();
-    expect(body.error).toContain('github OAuth is not configured');
+    expect(res.status).toBe(307);
+    const location = res.headers.get('location');
+    expect(location).toContain('/settings/integrations');
+    expect(location).toContain('error=unconfigured_provider');
   });
 
   it('redirects to GitHub OAuth URL when provider is properly configured', async () => {

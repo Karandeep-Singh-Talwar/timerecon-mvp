@@ -83,13 +83,27 @@ export async function GET(
   }
 
   if (!isProviderConfigured(provider)) {
-    const isJson = req.headers.get('accept')?.includes('application/json') && !req.headers.get('accept')?.includes('text/html');
-    if (isJson) {
-      return NextResponse.json(
-        { error: `${provider} OAuth is not configured on this deployment.` },
-        { status: 503 }
+    // Automatically fall back to mock connection for demo deployments when live OAuth keys are unconfigured
+    const disableMock = process.env.ALLOW_MOCK_CONNECTORS === 'false';
+    if (!disableMock) {
+      await IntegrationService.saveIntegration(
+        session.user.id,
+        provider,
+        {
+          accessToken: `mock-access-token-${provider}`,
+          refreshToken: `mock-refresh-token-${provider}`,
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        },
+        `mock-${provider}-user`,
+        { mock: true, mode: 'mock' }
       );
+
+      const redirectUrl = new URL('/settings/integrations', req.nextUrl.origin);
+      redirectUrl.searchParams.set('connected', provider);
+      redirectUrl.searchParams.set('mock', 'true');
+      return NextResponse.redirect(redirectUrl);
     }
+
     const redirectUrl = new URL('/settings/integrations', req.nextUrl.origin);
     redirectUrl.searchParams.set('error', 'unconfigured_provider');
     redirectUrl.searchParams.set('provider', provider);
