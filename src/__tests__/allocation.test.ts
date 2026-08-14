@@ -96,6 +96,7 @@ describe('Allocation Engine & Confidence Calculator', () => {
       workItemId: null,
       metadata: { branch: 'feature/AUTH-231-login' },
       externalUrl: null,
+      providerEventId: null,
       createdAt: new Date(),
     };
 
@@ -130,5 +131,39 @@ describe('Allocation Engine & Confidence Calculator', () => {
     const result = await reasonAmbiguousSegment(segment, [], 'Gap in work');
     expect(result.allocationType).toBe('unallocated');
     expect(result.confidenceLevel).toBe('needs_review');
+  });
+
+  it('should allocate bridged gaps when the same work item surrounds them', () => {
+    const workItem: WorkItem = {
+      id: 'wi-1',
+      userId: 'u-1',
+      provider: 'jira',
+      externalId: 'BUG-442',
+      externalUrl: null,
+      title: 'Worker leak',
+      description: null,
+      status: 'in_progress',
+      project: 'BUG',
+      itemType: 'bug',
+      metadata: null,
+      lastSyncAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const gap: TimeSegment = {
+      startTime: new Date('2026-08-10T10:00:00Z'),
+      endTime: new Date('2026-08-10T11:00:00Z'),
+      durationMinutes: 60,
+      events: [],
+      isCalendarAnchored: false,
+      isGap: true,
+    };
+
+    const candidates = scoreCandidatesForSegment(gap, [workItem], [], 'wi-1', 'wi-1');
+    expect(candidates[0].workItemKey).toBe('BUG-442');
+    expect(candidates[0].allocationType).toBe('work_item');
+    expect(candidates[0].confidenceLevel).toBe('medium');
+    expect(candidates[0].signals.some((s) => s.type === 'continuity')).toBe(true);
   });
 });

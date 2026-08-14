@@ -12,6 +12,8 @@ const loginSchema = z.object({
 
 const nextAuthResult = NextAuth({
   ...authConfig,
+  secret: process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET || 'timerecon-default-secret-key-32-chars',
+  trustHost: true,
   providers: [
     Credentials({
       name: 'credentials',

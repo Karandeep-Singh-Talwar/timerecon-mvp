@@ -143,7 +143,11 @@ export class GoogleCalendarConnector implements Connector {
         });
       } catch (err) {
         console.error('Error refreshing Google Calendar token:', err);
-        return null;
+        await prisma.integration.update({
+          where: { id: integration.id },
+          data: { status: 'expired' },
+        });
+        throw new Error('Google Calendar connection expired. Reconnect in Settings.');
       }
     }
 

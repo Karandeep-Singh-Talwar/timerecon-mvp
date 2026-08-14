@@ -53,8 +53,65 @@ export function scoreCandidatesForSegment(
   prevWorkItemId?: string,
   nextWorkItemId?: string
 ): CandidateScore[] {
-  // If gap with no events
+  // Gap with no events: only allocate via temporal continuity — never invent tickets.
   if (segment.isGap && segment.events.length === 0) {
+    if (prevWorkItemId && prevWorkItemId === nextWorkItemId) {
+      const wi = workItems.find((w) => w.id === prevWorkItemId);
+      if (wi) {
+        const signals: EvidenceSignal[] = [
+          {
+            type: 'continuity',
+            weight: SIGNAL_WEIGHTS.continuity,
+            strength: 1.0,
+            explanation: `Same work item (${wi.externalId}) before and after this gap`,
+          },
+        ];
+        const { score, level } = calculateConfidence(signals);
+        // Bridged gaps are explainable but not high-confidence without direct evidence.
+        const capped = Math.min(score + 0.45, 0.65);
+        return [
+          {
+            workItemId: wi.id,
+            workItemKey: wi.externalId,
+            title: wi.title,
+            project: wi.project || undefined,
+            allocationType: 'work_item',
+            rawScore: capped,
+            confidenceScore: capped,
+            confidenceLevel: capped >= 0.5 ? 'medium' : 'needs_review',
+            signals,
+          },
+        ];
+      }
+    }
+
+    if (prevWorkItemId && segment.durationMinutes <= 90) {
+      const wi = workItems.find((w) => w.id === prevWorkItemId);
+      if (wi) {
+        const signals: EvidenceSignal[] = [
+          {
+            type: 'continuity',
+            weight: SIGNAL_WEIGHTS.continuity,
+            strength: 0.8,
+            explanation: `Likely continuation of ${wi.externalId} after prior activity (≤90m gap)`,
+          },
+        ];
+        return [
+          {
+            workItemId: wi.id,
+            workItemKey: wi.externalId,
+            title: wi.title,
+            project: wi.project || undefined,
+            allocationType: 'work_item',
+            rawScore: 0.45,
+            confidenceScore: 0.45,
+            confidenceLevel: 'needs_review',
+            signals,
+          },
+        ];
+      }
+    }
+
     return [
       {
         title: 'Unallocated Time',
@@ -239,8 +296,15 @@ export function scoreCandidatesForSegment(
       });
     }
 
-    // 8. Continuity (0.10)
-    if (workItem.id === prevWorkItemId || workItem.id === nextWorkItemId) {
+    // 8. Continuity (0.10) — never attach unrelated PR reviews to prior ticket via continuity alone
+    const isUnrelatedPrReview = segment.events.some((ev) => ev.eventType === 'pr_review') &&
+      !segment.events.some(
+        (ev) =>
+          ev.workItemId === workItem.id ||
+          ev.title.toUpperCase().includes(itemKey) ||
+          JSON.stringify(ev.metadata || {}).toUpperCase().includes(itemKey)
+      );
+    if (!isUnrelatedPrReview && (workItem.id === prevWorkItemId || workItem.id === nextWorkItemId)) {
       signals.push({
         type: 'continuity',
         weight: SIGNAL_WEIGHTS.continuity,

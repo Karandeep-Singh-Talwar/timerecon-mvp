@@ -64,6 +64,12 @@ export function createMockPrisma(store: MemoryStore = createMemoryStore()) {
         store.users.push(item);
         return item;
       },
+      async update({ where, data }: any) {
+        const existing = store.users.find((u) => u.id === where.id);
+        if (!existing) throw new Error('User not found');
+        Object.assign(existing, data, { updatedAt: new Date() });
+        return existing;
+      },
       async upsert({ where, create, update }: any) {
         let existing = await mockPrisma.user.findUnique({ where });
         if (existing) {
@@ -187,18 +193,35 @@ export function createMockPrisma(store: MemoryStore = createMemoryStore()) {
       },
       async findFirst({ where }: any = {}) {
         return (
-          store.normalizedEvents.find(
-            (e) =>
-              (!where.userId || e.userId === where.userId) &&
-              (!where.provider || e.provider === where.provider) &&
-              (!where.eventType || e.eventType === where.eventType) &&
-              (!where.title || e.title === where.title) &&
-              (!where.occurredAt || new Date(e.occurredAt).getTime() === new Date(where.occurredAt).getTime())
-          ) || null
+          store.normalizedEvents.find((e) => {
+            if (where.userId && e.userId !== where.userId) return false;
+            if (where.provider && e.provider !== where.provider) return false;
+            if (where.eventType && e.eventType !== where.eventType) return false;
+            if (where.title && e.title !== where.title) return false;
+            if (
+              where.occurredAt &&
+              new Date(e.occurredAt).getTime() !== new Date(where.occurredAt).getTime()
+            ) {
+              return false;
+            }
+            if (where.providerEventId !== undefined) {
+              if (where.providerEventId === null) {
+                if (e.providerEventId != null) return false;
+              } else if (e.providerEventId !== where.providerEventId) {
+                return false;
+              }
+            }
+            return true;
+          }) || null
         );
       },
       async create({ data }: any) {
-        const item = { id: data.id || genId('ne'), ...data, createdAt: new Date() };
+        const item = {
+          id: data.id || genId('ne'),
+          providerEventId: data.providerEventId ?? null,
+          ...data,
+          createdAt: new Date(),
+        };
         store.normalizedEvents.push(item);
         return item;
       },

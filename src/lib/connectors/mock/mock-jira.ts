@@ -67,8 +67,9 @@ export class MockJiraConnector implements Connector {
       title: 'Logged 2 hours on AUTH-231',
       description: 'Worked on OAuth token encryption and refresh logic.',
       workItemExternalId: 'AUTH-231',
+      externalId: 'worklog-auth231-001',
       externalUrl: 'https://jira.company.com/browse/AUTH-231',
-      metadata: { timeSpentSeconds: 7200 },
+      metadata: { timeSpentSeconds: 7200, id: 'worklog-auth231-001' },
     },
     {
       provider: 'jira',
@@ -77,6 +78,7 @@ export class MockJiraConnector implements Connector {
       title: 'Commented on AUTH-231',
       description: 'PR is ready for review. Token encryption added.',
       workItemExternalId: 'AUTH-231',
+      externalId: 'comment-auth231-101',
       externalUrl: 'https://jira.company.com/browse/AUTH-231#comment-101',
     },
     {
@@ -86,6 +88,7 @@ export class MockJiraConnector implements Connector {
       title: 'Updated BUG-442 status to Done',
       description: 'Resolved memory leak in Redis connection pool.',
       workItemExternalId: 'BUG-442',
+      externalId: 'issue-upd-bug442-done',
       externalUrl: 'https://jira.company.com/browse/BUG-442',
     },
     {
@@ -95,6 +98,7 @@ export class MockJiraConnector implements Connector {
       title: 'Updated status of PROJ-101 to In Progress',
       description: 'Started designing confidence scoring heuristics.',
       workItemExternalId: 'PROJ-101',
+      externalId: 'issue-upd-proj101-wip',
       externalUrl: 'https://jira.company.com/browse/PROJ-101',
     },
   ];

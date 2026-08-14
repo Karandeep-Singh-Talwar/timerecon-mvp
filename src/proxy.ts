@@ -9,7 +9,7 @@ export function isPublicPath(pathname: string): boolean {
 }
 
 /**
- * Next.js 16 request gate. This is an optimistic navigation guard only;
+ * Next.js request gate. This is an optimistic navigation guard only;
  * every data route also verifies the authenticated user and record ownership.
  */
 export async function proxy(request: NextRequest) {
@@ -19,10 +19,14 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  const isHttps =
+    request.nextUrl.protocol === 'https:' ||
+    request.headers.get('x-forwarded-proto') === 'https';
+
   const token = await getToken({
     req: request,
-    secret: process.env.NEXTAUTH_SECRET,
-    secureCookie: request.nextUrl.protocol === 'https:',
+    secret: process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET,
+    secureCookie: isHttps,
   });
 
   if (token?.id) {
@@ -37,6 +41,8 @@ export async function proxy(request: NextRequest) {
   loginUrl.searchParams.set('callbackUrl', `${pathname}${request.nextUrl.search}`);
   return NextResponse.redirect(loginUrl);
 }
+
+export const middleware = proxy;
 
 export const config = {
   matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],

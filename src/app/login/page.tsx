@@ -26,13 +26,37 @@ export default function LoginPage() {
       });
 
       if (result?.error) {
-        setError('Invalid email or password');
+        setError('Invalid email or password.');
       } else {
-        router.push('/dashboard');
-        router.refresh();
+        window.location.href = '/dashboard';
       }
     } catch {
       setError('Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDemoLogin() {
+    setError('');
+    setLoading(true);
+    setEmail('dev@timerecon.test');
+    setPassword('password123');
+
+    try {
+      const result = await signIn('credentials', {
+        email: 'dev@timerecon.test',
+        password: 'password123',
+        redirect: false,
+      });
+
+      if (result?.error) {
+        setError('Demo login failed. You can create a new account via Create one.');
+      } else {
+        window.location.href = '/dashboard';
+      }
+    } catch {
+      setError('Something went wrong during demo login.');
     } finally {
       setLoading(false);
     }
@@ -86,6 +110,16 @@ export default function LoginPage() {
               disabled={loading}
             >
               {loading ? 'Signing in...' : 'Sign in'}
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleDemoLogin}
+              disabled={loading}
+              style={{ width: '100%', marginTop: 'var(--space-sm)' }}
+            >
+              ⚡ Quick Demo Login (dev@timerecon.test)
             </button>
           </form>
         </div>

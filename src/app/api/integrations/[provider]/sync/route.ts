@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { IntegrationService } from '@/lib/connectors/service';
 import { IntegrationProvider } from '@/lib/connectors/types';
-import { enqueueSyncJob } from '@/workers/syncQueue';
+import { useTemporalJobs } from '@/temporal/config';
+import { startIntegrationSync } from '@/temporal/client';
 
 export async function POST(
   req: NextRequest,
@@ -20,7 +21,7 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid provider' }, { status: 400 });
   }
 
-  let body: any = {};
+  let body: Record<string, unknown> = {};
   try {
     body = await req.json();
   } catch {
@@ -29,16 +30,26 @@ export async function POST(
 
   const searchParams = req.nextUrl.searchParams;
   const useMock =
-    body.useMock ??
+    (body.useMock as boolean | undefined) ??
     (searchParams.get('mock') === 'true' || process.env.USE_MOCK_CONNECTORS === 'true');
 
-  const sinceStr = body.since || searchParams.get('since');
+  const sinceStr = (body.since as string | undefined) || searchParams.get('since');
   const since = sinceStr ? new Date(sinceStr) : undefined;
 
   try {
-    if (process.env.USE_BULLMQ === 'true') {
-      await enqueueSyncJob(session.user.id, provider, { useMock, since });
-      return NextResponse.json({ success: true, message: 'Sync enqueued' });
+    if (useTemporalJobs()) {
+      const handle = await startIntegrationSync({
+        userId: session.user.id,
+        provider,
+        useMock,
+        since,
+      });
+      return NextResponse.json({
+        success: true,
+        queued: true,
+        workflowId: handle.workflowId,
+        message: 'Sync workflow started',
+      });
     }
 
     const result = await IntegrationService.syncIntegration(session.user.id, provider, {
@@ -46,9 +57,10 @@ export async function POST(
       since,
     });
 
-    return NextResponse.json({ success: true, ...result });
-  } catch (error: any) {
+    return NextResponse.json({ success: true, queued: false, ...result });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Sync failed';
     console.error(`Error syncing integration ${provider}:`, error);
-    return NextResponse.json({ error: error.message || 'Sync failed' }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

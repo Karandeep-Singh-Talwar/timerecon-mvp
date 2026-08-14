@@ -1,5 +1,6 @@
 import prisma from '@/lib/db';
 import { NormalizedEvent } from '@prisma/client';
+import { nextDate, zonedDateTime } from '@/lib/time';
 
 export interface TimeSegment {
   startTime: Date;
@@ -17,46 +18,6 @@ export interface TimelineOptions {
   workingHoursStart?: string; // "09:00"
   workingHoursEnd?: string;   // "17:30"
   eventsInput?: NormalizedEvent[];
-}
-
-function nextDate(date: string): string {
-  const value = new Date(`${date}T12:00:00.000Z`);
-  value.setUTCDate(value.getUTCDate() + 1);
-  return value.toISOString().slice(0, 10);
-}
-
-function timeZoneOffsetMilliseconds(timestamp: Date, timezone: string): number {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(timestamp);
-  const values = Object.fromEntries(
-    parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value])
-  );
-  const renderedAsUtc = Date.UTC(
-    Number(values.year),
-    Number(values.month) - 1,
-    Number(values.day),
-    Number(values.hour),
-    Number(values.minute),
-    Number(values.second)
-  );
-  return renderedAsUtc - timestamp.getTime();
-}
-
-function zonedDateTime(date: string, time: string, timezone: string): Date {
-  const [year, month, day] = date.split('-').map(Number);
-  const [hours, minutes] = time.split(':').map(Number);
-  const utcGuess = Date.UTC(year, month - 1, day, hours, minutes, 0, 0);
-  const firstPass = new Date(utcGuess - timeZoneOffsetMilliseconds(new Date(utcGuess), timezone));
-  const secondOffset = timeZoneOffsetMilliseconds(firstPass, timezone);
-  return new Date(utcGuess - secondOffset);
 }
 
 /**
@@ -193,14 +154,106 @@ export async function generateTimeSegments(options: TimelineOptions): Promise<Ti
     clusters.push({
       startTime: new Date(earliest.getTime() - FIVE_MINS_MS),
       endTime: new Date(latest.getTime() + FIVE_MINS_MS),
-      events: currentCluster,
+      events: [...currentCluster],
     });
   }
+
+  // 3b. Expand point-like clusters into meaningful work spans without crossing hard boundaries.
+  // Commits/PRs usually mark end of work → expand mostly backward.
+  // Issue activity (debug/investigation) expands both directions.
+  const POINT_BACK_MS = 40 * 60 * 1000;
+  const POINT_FWD_MS = 10 * 60 * 1000;
+  const INVESTIGATION_PAD_MS = 20 * 60 * 1000;
+  const MIN_POINT_SPAN_MS = 30 * 60 * 1000;
+  const POINT_LIKE_MAX_MS = 25 * 60 * 1000;
+
+  const expandPointClusters = (
+    input: Array<{ startTime: Date; endTime: Date; events: NormalizedEvent[] }>
+  ) => {
+    const expanded = input.map((cl) => ({
+      startTime: new Date(cl.startTime),
+      endTime: new Date(cl.endTime),
+      events: cl.events,
+    }));
+
+    for (let i = 0; i < expanded.length; i++) {
+      const cl = expanded[i];
+      const span = cl.endTime.getTime() - cl.startTime.getTime();
+      const hasExplicitDuration = cl.events.some(
+        (e) => e.endedAt != null || (typeof e.duration === 'number' && e.duration >= 15)
+      );
+      if (hasExplicitDuration || span > POINT_LIKE_MAX_MS) continue;
+
+      const artifactTimes = cl.events.map((e) => e.occurredAt.getTime());
+      const firstArtifact = Math.min(...artifactTimes);
+      const lastArtifact = Math.max(...artifactTimes);
+
+      let leftBound = Number.NEGATIVE_INFINITY;
+      if (i > 0) leftBound = expanded[i - 1].endTime.getTime();
+      for (const a of mergedCalendarAnchors) {
+        if (a.endTime.getTime() <= cl.startTime.getTime()) {
+          leftBound = Math.max(leftBound, a.endTime.getTime());
+        }
+      }
+      // Soft floor: respect workday unless activity already sits outside it.
+      const softLeft =
+        firstArtifact < defaultWorkdayStart.getTime()
+          ? firstArtifact - POINT_BACK_MS
+          : defaultWorkdayStart.getTime();
+      leftBound = Number.isFinite(leftBound) ? Math.max(leftBound, softLeft) : softLeft;
+
+      let rightBound = Number.POSITIVE_INFINITY;
+      if (i < expanded.length - 1) rightBound = expanded[i + 1].startTime.getTime();
+      for (const a of mergedCalendarAnchors) {
+        if (a.startTime.getTime() >= cl.endTime.getTime()) {
+          rightBound = Math.min(rightBound, a.startTime.getTime());
+        }
+      }
+      const softRight =
+        lastArtifact > defaultWorkdayEnd.getTime()
+          ? lastArtifact + POINT_FWD_MS
+          : defaultWorkdayEnd.getTime();
+      rightBound = Number.isFinite(rightBound) ? Math.min(rightBound, softRight) : softRight;
+
+      if (rightBound <= leftBound) continue;
+
+      const deliverableHeavy = cl.events.every((e) =>
+        ['commit', 'pr_opened', 'pr_merged', 'pr_review'].includes(e.eventType)
+      );
+
+      let newStart: number;
+      let newEnd: number;
+      if (deliverableHeavy) {
+        newEnd = Math.min(lastArtifact + POINT_FWD_MS, rightBound);
+        newStart = Math.max(lastArtifact - POINT_BACK_MS, leftBound);
+      } else {
+        newStart = Math.max(firstArtifact - INVESTIGATION_PAD_MS, leftBound);
+        newEnd = Math.min(lastArtifact + INVESTIGATION_PAD_MS, rightBound);
+      }
+
+      if (newEnd - newStart < MIN_POINT_SPAN_MS && rightBound - leftBound >= MIN_POINT_SPAN_MS) {
+        const deficit = MIN_POINT_SPAN_MS - (newEnd - newStart);
+        newStart = Math.max(leftBound, newStart - deficit);
+        if (newEnd - newStart < MIN_POINT_SPAN_MS) {
+          newEnd = Math.min(rightBound, newStart + MIN_POINT_SPAN_MS);
+        }
+      }
+
+      if (newEnd > newStart) {
+        cl.startTime = new Date(newStart);
+        cl.endTime = new Date(newEnd);
+      }
+    }
+
+    return expanded;
+  };
+
+  const durationAwareClusters = expandPointClusters(clusters);
 
   // 4. Adjust clusters so they do not overlap calendar anchors
   const adjustedNonCalendarSlots: Array<{ startTime: Date; endTime: Date; events: NormalizedEvent[] }> = [];
 
-  for (const cl of clusters) {
+  for (const cl of durationAwareClusters) {
     let subStart = cl.startTime;
     let subEnd = cl.endTime;
 
@@ -303,15 +356,18 @@ export async function generateTimeSegments(options: TimelineOptions): Promise<Ti
           isGap: true,
         });
       } else if (gapMins > 0) {
-        // Extend non-calendar segment or insert short gap
-        result.push({
-          startTime: currentTime,
-          endTime: seg.startTime,
-          durationMinutes: gapMins,
-          events: [],
-          isCalendarAnchored: false,
-          isGap: true,
-        });
+        // Short gaps absorb into previous active work block when possible.
+        const prev = result[result.length - 1];
+        if (prev && !prev.isCalendarAnchored && !prev.isGap) {
+          prev.endTime = seg.startTime;
+          prev.durationMinutes = Math.max(
+            1,
+            Math.round((prev.endTime.getTime() - prev.startTime.getTime()) / 60000)
+          );
+        } else {
+          // Otherwise pull the upcoming segment earlier.
+          seg.startTime = currentTime;
+        }
       }
     }
 

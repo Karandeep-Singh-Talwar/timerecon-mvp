@@ -45,10 +45,9 @@ export default function RegisterPage() {
 
       if (result?.error) {
         // Registration succeeded but auto-login failed
-        router.push('/login');
+        window.location.href = '/login';
       } else {
-        router.push('/dashboard');
-        router.refresh();
+        window.location.href = '/dashboard';
       }
     } catch {
       setError('Something went wrong. Please try again.');

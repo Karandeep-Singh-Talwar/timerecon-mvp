@@ -135,8 +135,13 @@ export class IntegrationService {
       const integration = await prisma.integration.findUnique({
         where: { userId_provider: { userId, provider } },
       });
-      if (!integration || integration.status !== 'active') {
+      if (!integration || (integration.status !== 'active' && integration.status !== 'expired')) {
         throw new Error(`Integration for ${provider} is not connected or active.`);
+      }
+      if (integration.status === 'expired') {
+        throw new Error(
+          `${provider} connection expired. Reconnect in Settings before syncing.`
+        );
       }
     }
 

@@ -120,6 +120,9 @@ model NormalizedEvent {
   workItemId  String?
   workItem    WorkItem? @relation(fields: [workItemId], references: [id])
 
+  // Stable provider-native event id when available (commit SHA, calendar event id, etc.)
+  providerEventId String?
+
   metadata    Json? // Raw evidence details
   externalUrl String?
 
@@ -129,6 +132,7 @@ model NormalizedEvent {
 
   @@index([userId, occurredAt])
   @@index([userId, provider, occurredAt])
+  @@index([userId, provider, providerEventId])
 }
 
 // === WORKDAY RECONSTRUCTION ===

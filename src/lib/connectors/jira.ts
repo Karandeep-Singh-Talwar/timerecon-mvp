@@ -155,7 +155,11 @@ export class JiraConnector implements Connector {
         });
       } catch (err) {
         console.error('Error refreshing Jira token:', err);
-        return null;
+        await prisma.integration.update({
+          where: { id: integration.id },
+          data: { status: 'expired' },
+        });
+        throw new Error('Jira connection expired. Reconnect in Settings.');
       }
     }
 
@@ -254,8 +258,13 @@ export class JiraConnector implements Connector {
                   title: `Worklog on ${item.externalId}: ${item.title}`,
                   description: wl.comment?.content?.[0]?.content?.[0]?.text || `Logged ${wl.timeSpent}`,
                   workItemExternalId: item.externalId,
+                  externalId: wl.id ? `worklog-${wl.id}` : undefined,
                   externalUrl: `${item.externalUrl}#worklog-${wl.id}`,
-                  metadata: { timeSpentSeconds: wl.timeSpentSeconds, author: wl.author?.displayName },
+                  metadata: {
+                    timeSpentSeconds: wl.timeSpentSeconds,
+                    author: wl.author?.displayName,
+                    id: wl.id,
+                  },
                 });
               }
             }

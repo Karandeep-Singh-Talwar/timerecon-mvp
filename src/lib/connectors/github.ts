@@ -132,6 +132,13 @@ export class GithubConnector implements Connector {
       });
 
       if (!res.ok) {
+        if (res.status === 401) {
+          await prisma.integration.updateMany({
+            where: { userId, provider: 'github' },
+            data: { status: 'expired' },
+          });
+          throw new Error('GitHub connection expired. Reconnect in Settings.');
+        }
         console.error(`GitHub Search API error ${res.status}: ${await res.text()}`);
         return [];
       }

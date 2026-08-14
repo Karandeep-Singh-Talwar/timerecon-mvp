@@ -33,8 +33,10 @@ const baseIntegrations: IntegrationItem[] = [
   },
 ];
 
+type ConnectionState = 'active' | 'expired' | 'disconnected';
+
 export default function IntegrationsPage() {
-  const [connectedMap, setConnectedMap] = useState<Record<string, boolean>>({});
+  const [connectionMap, setConnectionMap] = useState<Record<string, ConnectionState>>({});
   const [lastSyncMap, setLastSyncMap] = useState<Record<string, string>>({});
   const [loadingMap, setLoadingMap] = useState<Record<string, boolean>>({});
   const [connectModalProvider, setConnectModalProvider] = useState<IntegrationItem | null>(null);
@@ -45,22 +47,24 @@ export default function IntegrationsPage() {
       const res = await fetch('/api/integrations');
       if (res.ok) {
         const data = await res.json();
-        const connMap: Record<string, boolean> = {};
+        const connMap: Record<string, ConnectionState> = {};
         const syncMap: Record<string, string> = {};
         if (Array.isArray(data.integrations)) {
-          data.integrations.forEach((item: any) => {
+          data.integrations.forEach((item: { provider: string; status: string; lastSyncAt?: string }) => {
             if (item.status === 'active') {
-              connMap[item.provider] = true;
-              if (item.lastSyncAt) {
-                syncMap[item.provider] = new Date(item.lastSyncAt).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                });
-              }
+              connMap[item.provider] = 'active';
+            } else if (item.status === 'expired') {
+              connMap[item.provider] = 'expired';
+            }
+            if (item.lastSyncAt) {
+              syncMap[item.provider] = new Date(item.lastSyncAt).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              });
             }
           });
         }
-        setConnectedMap(connMap);
+        setConnectionMap(connMap);
         setLastSyncMap(syncMap);
       }
     } catch (err) {
@@ -70,7 +74,60 @@ export default function IntegrationsPage() {
 
   useEffect(() => {
     fetchIntegrations();
+
+    const searchParams = new URLSearchParams(window.location.search);
+    const connected = searchParams.get('connected');
+    const error = searchParams.get('error');
+    const provider = searchParams.get('provider');
+
+    if (connected) {
+      setMessage({
+        text: `${connected.toUpperCase()} connected successfully.`,
+        type: 'success',
+      });
+    } else if (error) {
+      if (error === 'unconfigured_provider') {
+        const name = provider ? provider.toUpperCase() : 'Integration';
+        setMessage({
+          text: `${name} OAuth is not configured on this deployment. Please set ${name}_CLIENT_ID and ${name}_CLIENT_SECRET in environment variables, or use Quick Mock Connect for testing.`,
+          type: 'error',
+        });
+      } else if (error === 'mock_disabled') {
+        setMessage({
+          text: 'Mock integrations are disabled on this production deployment.',
+          type: 'error',
+        });
+      } else if (error === 'oauth_cancelled') {
+        setMessage({
+          text: 'OAuth authorization was cancelled or failed.',
+          type: 'error',
+        });
+      } else {
+        setMessage({
+          text: `Integration error: ${error}`,
+          type: 'error',
+        });
+      }
+    }
   }, []);
+
+  const pollWorkflow = async (provider: string, workflowId: string) => {
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const statusRes = await fetch(
+        `/api/integrations/${provider}/sync/status?workflowId=${encodeURIComponent(workflowId)}`
+      );
+      if (!statusRes.ok) continue;
+      const statusData = await statusRes.json();
+      if (statusData.status === 'COMPLETED') {
+        return { ok: true as const, result: statusData.result };
+      }
+      if (statusData.status === 'FAILED' || statusData.status === 'TERMINATED' || statusData.status === 'CANCELLED') {
+        return { ok: false as const, error: `Sync ${String(statusData.status).toLowerCase()}` };
+      }
+    }
+    return { ok: false as const, error: 'Sync timed out waiting for workflow' };
+  };
 
   const handleDisconnect = async (provider: string) => {
     setLoadingMap((prev) => ({ ...prev, [provider]: true }));
@@ -82,7 +139,11 @@ export default function IntegrationsPage() {
       });
 
       if (res.ok) {
-        setConnectedMap((prev) => ({ ...prev, [provider]: false }));
+        setConnectionMap((prev) => {
+          const next = { ...prev };
+          delete next[provider];
+          return next;
+        });
         setMessage({ text: `${provider.toUpperCase()} disconnected successfully.`, type: 'success' });
       } else {
         const errData = await res.json();
@@ -103,18 +164,34 @@ export default function IntegrationsPage() {
       const res = await fetch(`/api/integrations/${provider}/sync`, {
         method: 'POST',
       });
+      const data = await res.json();
 
-      if (res.ok) {
+      if (!res.ok) {
+        setMessage({ text: data.error || 'Sync failed or provider offline.', type: 'error' });
+        if (String(data.error || '').toLowerCase().includes('expired')) {
+          setConnectionMap((prev) => ({ ...prev, [provider]: 'expired' }));
+        }
+        return;
+      }
+
+      if (data.queued && data.workflowId) {
+        setMessage({ text: `${provider.toUpperCase()} sync queued…`, type: 'success' });
+        const poll = await pollWorkflow(provider, data.workflowId);
+        if (poll.ok) {
+          setMessage({ text: `${provider.toUpperCase()} data synced successfully.`, type: 'success' });
+          fetchIntegrations();
+        } else {
+          setMessage({ text: poll.error || 'Sync failed.', type: 'error' });
+        }
+      } else {
         setMessage({ text: `${provider.toUpperCase()} data synced successfully.`, type: 'success' });
         fetchIntegrations();
-      } else {
-        setMessage({ text: 'Sync failed or provider offline.', type: 'error' });
       }
     } catch {
       setMessage({ text: 'Error triggering sync.', type: 'error' });
     } finally {
       setLoadingMap((prev) => ({ ...prev, [`sync-${provider}`]: false }));
-      setTimeout(() => setMessage(null), 4000);
+      setTimeout(() => setMessage(null), 5000);
     }
   };
 
@@ -160,7 +237,9 @@ export default function IntegrationsPage() {
 
         <div className={styles.integrationCards}>
           {baseIntegrations.map((integration) => {
-            const isConnected = !!connectedMap[integration.id];
+            const state = connectionMap[integration.id] || 'disconnected';
+            const isConnected = state === 'active';
+            const isExpired = state === 'expired';
             const isDisconnecting = loadingMap[integration.id];
             const isSyncing = loadingMap[`sync-${integration.id}`];
             const lastSync = lastSyncMap[integration.id];
@@ -177,22 +256,40 @@ export default function IntegrationsPage() {
                         Last synced today at {lastSync}
                       </div>
                     )}
+                    {isExpired && (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--error)', marginTop: '4px' }}>
+                        Auth expired — reconnect to resume sync
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 <div className={styles.integrationStatus}>
-                  {isConnected ? (
+                  {isConnected || isExpired ? (
                     <>
-                      <span className={`${styles.statusDot} ${styles.statusConnected}`} />
-                      <span style={{ fontSize: '0.8125rem', color: 'var(--success)' }}>Connected</span>
-                      
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => handleSyncNow(integration.id)}
-                        disabled={isSyncing}
-                      >
-                        {isSyncing ? 'Syncing...' : 'Sync Now'}
-                      </button>
+                      <span className={`${styles.statusDot} ${isExpired ? styles.statusDisconnected : styles.statusConnected}`} />
+                      <span style={{ fontSize: '0.8125rem', color: isExpired ? 'var(--error)' : 'var(--success)' }}>
+                        {isExpired ? 'Expired' : 'Connected'}
+                      </span>
+
+                      {isConnected && (
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => handleSyncNow(integration.id)}
+                          disabled={isSyncing}
+                        >
+                          {isSyncing ? 'Syncing...' : 'Sync Now'}
+                        </button>
+                      )}
+
+                      {isExpired && (
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => openConnectModal(integration)}
+                        >
+                          Reconnect
+                        </button>
+                      )}
 
                       <button
                         className="btn btn-secondary btn-sm"

@@ -103,7 +103,7 @@
 | **ORM** | Prisma | Type-safe queries, schema-as-code, migrations, excellent DX. |
 | **Authentication** | NextAuth.js (Auth.js v5) | Built-in OAuth, session management, extensible. We also need OAuth for integrations, so Auth.js handles the user auth side. |
 | **Styling** | Vanilla CSS + CSS Modules | Per requirements. No Tailwind unless requested. |
-| **Background Jobs** | BullMQ + Redis | Reliable job queue for sync tasks. Simple, well-tested. |
+| **Background Jobs** | Temporal (TypeScript SDK) | Durable sync + reconstruct workflows. BullMQ deprecated. Local: `temporal server start-dev` + `npm run worker`. Opt-in via `USE_TEMPORAL=true`; inline sync remains default for simple local dogfood. |
 | **AI/LLM** | Google Gemini API (gemini-2.0-flash) | Fast, cost-effective for reasoning about ambiguous allocations. Structured output support. |
 | **State Management** | React Context + SWR | Minimal client state. SWR for data fetching/caching. |
 | **Testing** | Vitest + Playwright | Unit + integration + E2E. Fast. |

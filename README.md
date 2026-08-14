@@ -3,12 +3,12 @@
 An AI workday reconstruction product for software engineering teams. Reconstructs workdays from Jira, GitHub, and Google Calendar activity into accurate timesheet entries.
 
 ## Tech Stack
-- **Framework:** Next.js 16 (App Router, Server Actions)
-- **Database:** Neon Postgres (Serverless) + Prisma ORM
-- **AI Engine:** Gemini 2.0 Flash API
-- **Background Jobs:** BullMQ + ioredis
+- **Framework:** Next.js 16 (App Router)
+- **Database:** Neon Postgres + Prisma ORM
+- **AI Engine:** Gemini 2.0 Flash API (ambiguous segments only)
+- **Background Jobs:** Temporal (`USE_TEMPORAL=true`) — BullMQ legacy only
 - **Authentication:** NextAuth.js (Auth.js v5)
-- **UI:** Custom CSS Design System (Journal Aesthetic, Dark Mode)
+- **UI:** Custom CSS (journal aesthetic)
 
 ## Getting Started
 
@@ -18,14 +18,9 @@ npm install
 ```
 
 ### 2. Environment Setup
-Copy `.env.example` to `.env` and fill in your database credentials:
-```env
-DATABASE_URL=postgresql://...
-DIRECT_URL=postgresql://...
-NEXTAUTH_SECRET=your-secret
-```
+Copy `.env.example` to `.env` and fill in database + secrets.
 
-### 3. Run Migrations & Seed Data
+### 3. Run Migrations & Generate Client
 ```bash
 npx prisma generate
 npx prisma db push
@@ -38,5 +33,18 @@ npm run dev
 
 Visit [http://localhost:3000](http://localhost:3000).
 
-## Deployment
-Hosted on Vercel: [https://timerecon-mvp.vercel.app](https://timerecon-mvp.vercel.app)
+### 5. Tests
+```bash
+npm test
+```
+
+### 6. Temporal jobs (optional)
+```bash
+# Install Temporal CLI, then:
+temporal server start-dev
+npm run worker
+# Set USE_TEMPORAL=true in .env
+```
+
+### Demo data
+After login, use **Seed demo** (or `POST /api/demo/seed`) for a 5-day synthetic workweek.

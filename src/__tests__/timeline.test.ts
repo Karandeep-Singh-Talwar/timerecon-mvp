@@ -34,6 +34,7 @@ describe('Timeline Engine', () => {
       workItemId: null,
       metadata: null,
       externalUrl: null,
+      providerEventId: null,
       createdAt: new Date(),
     };
 
@@ -63,6 +64,7 @@ describe('Timeline Engine', () => {
       workItemId: null,
       metadata: { repo: 'auth-service' },
       externalUrl: null,
+      providerEventId: null,
       createdAt: new Date(),
     };
 
@@ -79,6 +81,7 @@ describe('Timeline Engine', () => {
       workItemId: null,
       metadata: { repo: 'auth-service' },
       externalUrl: null,
+      providerEventId: null,
       createdAt: new Date(),
     };
 
@@ -107,6 +110,7 @@ describe('Timeline Engine', () => {
       workItemId: null,
       metadata: null,
       externalUrl: null,
+      providerEventId: null,
       createdAt: new Date(),
     };
 
@@ -137,7 +141,7 @@ describe('Timeline Engine', () => {
       id: 'meeting-1', userId, provider: 'google_calendar', eventType: 'calendar_event',
       occurredAt: new Date(`${date}T10:00:00.000Z`), endedAt: new Date(`${date}T11:00:00.000Z`),
       duration: 60, title: 'Planning', description: null, workItemId: null, metadata: null,
-      externalUrl: null, createdAt: new Date(),
+      externalUrl: null, providerEventId: null, createdAt: new Date(),
     };
     const secondMeeting: NormalizedEvent = {
       ...firstMeeting, id: 'meeting-2', occurredAt: new Date(`${date}T10:30:00.000Z`),
@@ -148,5 +152,37 @@ describe('Timeline Engine', () => {
     const meetings = segments.filter((segment) => segment.isCalendarAnchored);
     expect(meetings).toHaveLength(1);
     expect(meetings[0].durationMinutes).toBe(90);
+  });
+
+  it('expands isolated commit point events into ~30m+ backward-biased spans', async () => {
+    const commit: NormalizedEvent = {
+      id: 'c-solo',
+      userId,
+      provider: 'github',
+      eventType: 'commit',
+      occurredAt: new Date(`${date}T14:00:00.000Z`),
+      endedAt: null,
+      duration: null,
+      title: 'feat: AUTH-231 login',
+      description: null,
+      workItemId: null,
+      metadata: { branch: 'feature/AUTH-231' },
+      externalUrl: null,
+      providerEventId: null,
+      createdAt: new Date(),
+    };
+
+    const segments = await generateTimeSegments({
+      userId,
+      date,
+      eventsInput: [commit],
+    });
+
+    const work = segments.find((s) => s.events.length === 1 && s.events[0].id === 'c-solo');
+    expect(work).toBeDefined();
+    expect(work!.durationMinutes).toBeGreaterThanOrEqual(30);
+    // Mostly before the commit timestamp
+    expect(work!.startTime.getTime()).toBeLessThan(commit.occurredAt.getTime());
+    expect(work!.endTime.getTime()).toBeGreaterThanOrEqual(commit.occurredAt.getTime());
   });
 });

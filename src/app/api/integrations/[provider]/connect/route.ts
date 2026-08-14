@@ -24,22 +24,42 @@ export async function GET(
 ) {
   const session = await auth();
   if (!session?.user?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const isJson = req.headers.get('accept')?.includes('application/json') && !req.headers.get('accept')?.includes('text/html');
+    if (isJson) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const loginUrl = new URL('/login', req.nextUrl.origin);
+    loginUrl.searchParams.set('callbackUrl', req.nextUrl.pathname);
+    return NextResponse.redirect(loginUrl);
   }
 
   const params = await context.params;
   const provider = params.provider as IntegrationProvider;
 
   if (!['jira', 'github', 'google_calendar'].includes(provider)) {
-    return NextResponse.json({ error: 'Invalid provider' }, { status: 400 });
+    const isJson = req.headers.get('accept')?.includes('application/json') && !req.headers.get('accept')?.includes('text/html');
+    if (isJson) {
+      return NextResponse.json({ error: 'Invalid provider' }, { status: 400 });
+    }
+    const redirectUrl = new URL('/settings/integrations', req.nextUrl.origin);
+    redirectUrl.searchParams.set('error', 'invalid_provider');
+    return NextResponse.redirect(redirectUrl);
   }
 
   const searchParams = req.nextUrl.searchParams;
   const mockRequested = searchParams.get('mock') === 'true' || process.env.USE_MOCK_CONNECTORS === 'true';
-  const useMock = mockRequested && process.env.NODE_ENV !== 'production';
+  const allowMockInProd = process.env.ALLOW_MOCK_CONNECTORS === 'true' || process.env.USE_MOCK_CONNECTORS === 'true';
+  const useMock = mockRequested && (process.env.NODE_ENV !== 'production' || allowMockInProd);
 
   if (mockRequested && !useMock) {
-    return NextResponse.json({ error: 'Mock integrations are disabled in production.' }, { status: 403 });
+    const isJson = req.headers.get('accept')?.includes('application/json') && !req.headers.get('accept')?.includes('text/html');
+    if (isJson) {
+      return NextResponse.json({ error: 'Mock integrations are disabled in production.' }, { status: 403 });
+    }
+    const redirectUrl = new URL('/settings/integrations', req.nextUrl.origin);
+    redirectUrl.searchParams.set('error', 'mock_disabled');
+    redirectUrl.searchParams.set('provider', provider);
+    return NextResponse.redirect(redirectUrl);
   }
 
   if (useMock) {
@@ -63,10 +83,17 @@ export async function GET(
   }
 
   if (!isProviderConfigured(provider)) {
-    return NextResponse.json(
-      { error: `${provider} OAuth is not configured on this deployment.` },
-      { status: 503 }
-    );
+    const isJson = req.headers.get('accept')?.includes('application/json') && !req.headers.get('accept')?.includes('text/html');
+    if (isJson) {
+      return NextResponse.json(
+        { error: `${provider} OAuth is not configured on this deployment.` },
+        { status: 503 }
+      );
+    }
+    const redirectUrl = new URL('/settings/integrations', req.nextUrl.origin);
+    redirectUrl.searchParams.set('error', 'unconfigured_provider');
+    redirectUrl.searchParams.set('provider', provider);
+    return NextResponse.redirect(redirectUrl);
   }
 
   const state = createOAuthState(session.user.id, provider);

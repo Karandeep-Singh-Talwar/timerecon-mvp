@@ -89,8 +89,57 @@ export async function reconstructWorkday(options: ReconstructOptions) {
 
   const modifiedAllocations = existingSession?.allocations.filter((a) => a.isUserModified) || [];
 
-  const tasks = segments.map((seg, i) => async () => {
-    // Check if segment overlaps a user-modified allocation
+  const inferWorkItemIdFromSegment = (seg: TimeSegment): string | undefined => {
+    for (const ev of seg.events) {
+      if (ev.workItemId) return ev.workItemId;
+    }
+    const keyMatch = seg.events
+      .map((ev) => ev.title.toUpperCase().match(/[A-Z]{2,10}-\d+/))
+      .find(Boolean);
+    if (keyMatch?.[0]) {
+      const wi = workItems.find((w) => w.externalId.toUpperCase() === keyMatch[0]);
+      if (wi) return wi.id;
+    }
+    return undefined;
+  };
+
+  const peekNextWorkItemId = (fromIndex: number): string | undefined => {
+    for (let j = fromIndex + 1; j < segments.length; j++) {
+      const next = segments[j];
+      if (next.isCalendarAnchored) return undefined;
+      const inferred = inferWorkItemIdFromSegment(next);
+      if (inferred) return inferred;
+      if (!next.isGap && next.events.length > 0) return undefined;
+    }
+    return undefined;
+  };
+
+  // Sequential allocation so continuity can use previous/next work-item context.
+  const allocationPayloads: Array<{
+    startTime: Date;
+    endTime: Date;
+    durationMinutes: number;
+    allocationType: string;
+    workItemId?: string;
+    title: string;
+    description?: string;
+    confidence: number;
+    confidenceLevel: string;
+    status: string;
+    isUserModified: boolean;
+    evidence: Array<{
+      normalizedEventId: string;
+      evidenceType: string;
+      strength: number;
+      explanation: string;
+    }>;
+  }> = [];
+
+  let previousWorkItemId: string | undefined;
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+
     const modifiedMatch = modifiedAllocations.find(
       (m) =>
         (m.startTime >= seg.startTime && m.startTime < seg.endTime) ||
@@ -98,7 +147,7 @@ export async function reconstructWorkday(options: ReconstructOptions) {
     );
 
     if (modifiedMatch) {
-      return {
+      allocationPayloads.push({
         startTime: modifiedMatch.startTime,
         endTime: modifiedMatch.endTime,
         durationMinutes: modifiedMatch.durationMinutes,
@@ -111,10 +160,19 @@ export async function reconstructWorkday(options: ReconstructOptions) {
         status: modifiedMatch.status,
         isUserModified: true,
         evidence: [],
-      };
+      });
+      previousWorkItemId = modifiedMatch.workItemId || previousWorkItemId;
+      continue;
     }
 
-    const candidates = scoreCandidatesForSegment(seg, workItems, userLearnings, undefined);
+    const nextWorkItemId = peekNextWorkItemId(i);
+    const candidates = scoreCandidatesForSegment(
+      seg,
+      workItems,
+      userLearnings,
+      previousWorkItemId,
+      nextWorkItemId
+    );
     const topCandidate = candidates[0];
 
     let finalAllocation: {
@@ -128,19 +186,30 @@ export async function reconstructWorkday(options: ReconstructOptions) {
 
     if (
       !topCandidate ||
-      topCandidate.confidenceScore < 0.80 ||
+      topCandidate.confidenceScore < 0.8 ||
       (candidates[1] && topCandidate.confidenceScore - candidates[1].confidenceScore < 0.15)
     ) {
-      // Ambiguous case -> run AI / heuristic disambiguation
-      const aiResult = await reasonAmbiguousSegment(seg, candidates, undefined, userLearnings);
-      finalAllocation = {
-        allocationType: aiResult.allocationType,
-        workItemId: aiResult.workItemId,
-        title: aiResult.title,
-        confidence: aiResult.confidence,
-        confidenceLevel: aiResult.confidenceLevel,
-        description: aiResult.reasoning,
-      };
+      // Gap continuity candidates already encode uncertainty — skip LLM invention.
+      if (seg.isGap && topCandidate && topCandidate.allocationType !== 'unallocated') {
+        finalAllocation = {
+          allocationType: topCandidate.allocationType,
+          workItemId: topCandidate.workItemId,
+          title: topCandidate.title,
+          confidence: topCandidate.confidenceScore,
+          confidenceLevel: topCandidate.confidenceLevel,
+          description: topCandidate.signals.map((s) => s.explanation).join('; '),
+        };
+      } else {
+        const aiResult = await reasonAmbiguousSegment(seg, candidates, undefined, userLearnings);
+        finalAllocation = {
+          allocationType: aiResult.allocationType,
+          workItemId: aiResult.workItemId,
+          title: aiResult.title,
+          confidence: aiResult.confidence,
+          confidenceLevel: aiResult.confidenceLevel,
+          description: aiResult.reasoning,
+        };
+      }
     } else {
       finalAllocation = {
         allocationType: topCandidate.allocationType,
@@ -154,15 +223,17 @@ export async function reconstructWorkday(options: ReconstructOptions) {
 
     const evidenceItems = seg.events.flatMap((ev) => {
       if (!topCandidate || topCandidate.signals.length === 0) return [];
-      return topCandidate.signals.filter((sig) => signalHasDirectEventSupport(ev, topCandidate, sig)).map((sig) => ({
-        normalizedEventId: ev.id,
-        evidenceType: sig.type,
-        strength: sig.strength,
-        explanation: sig.explanation,
-      }));
+      return topCandidate.signals
+        .filter((sig) => signalHasDirectEventSupport(ev, topCandidate, sig))
+        .map((sig) => ({
+          normalizedEventId: ev.id,
+          evidenceType: sig.type,
+          strength: sig.strength,
+          explanation: sig.explanation,
+        }));
     });
 
-    return {
+    allocationPayloads.push({
       startTime: seg.startTime,
       endTime: seg.endTime,
       durationMinutes: seg.durationMinutes,
@@ -175,10 +246,18 @@ export async function reconstructWorkday(options: ReconstructOptions) {
       status: 'suggested',
       isUserModified: false,
       evidence: evidenceItems,
-    };
-  });
+    });
 
-  const allocationPayloads = await Promise.all(tasks.map((t) => t()));
+    if (finalAllocation.workItemId) {
+      previousWorkItemId = finalAllocation.workItemId;
+    } else if (
+      finalAllocation.allocationType === 'meeting' ||
+      finalAllocation.allocationType === 'pr_review' ||
+      (finalAllocation.allocationType === 'unallocated' && !seg.isGap)
+    ) {
+      previousWorkItemId = undefined;
+    }
+  }
 
   let totalMinutes = 0;
   let allocatedMinutes = 0;
